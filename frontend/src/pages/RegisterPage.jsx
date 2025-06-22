@@ -1,4 +1,5 @@
 // src/pages/RegisterPersonPage.jsx
+
 import React, { useState } from 'react';
 import { registerPerson } from '../services/api';
 
