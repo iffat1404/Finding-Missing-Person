@@ -1,6 +1,6 @@
 // src/pages/LoginPage.jsx
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { login } from '../services/api';
 
 function LoginPage() {
@@ -9,6 +9,10 @@ function LoginPage() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Check if we were redirected from the register page with a success message
+  const successMessage = location.state?.message;
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -17,7 +21,9 @@ function LoginPage() {
     try {
       const data = await login(username, password);
       localStorage.setItem('accessToken', data.access_token);
-      navigate('/');
+      // We will also store the user's role, which the API will provide
+      localStorage.setItem('userRole', data.role);
+      navigate('/'); // Navigate to the dashboard (which will be the root path)
     } catch (err) {
       setError('Login failed. Please check your credentials.');
     } finally {
@@ -29,6 +35,9 @@ function LoginPage() {
     <div className="flex items-center justify-center min-h-screen min-w-screen">
       <div className="w-full max-w-md p-8 space-y-6 bg-gray-800 rounded-lg shadow-lg">
         <h2 className="text-3xl font-bold text-center text-white">Log In</h2>
+        
+        {successMessage && <p className="text-center text-green-400">{successMessage}</p>}
+
         <form onSubmit={handleLogin} className="space-y-4">
           <input type="text" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} required className="w-full px-4 py-2 text-white bg-gray-700 border border-gray-600 rounded-md" />
           <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required className="w-full px-4 py-2 text-white bg-gray-700 border border-gray-600 rounded-md" />

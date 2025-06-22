@@ -1,234 +1,268 @@
 # backend/db.py
 
-from __future__ import annotations
-
-import sqlite3
+import mysql.connector
+from mysql.connector import Error
 from typing import List, Dict, Any
-
 import numpy as np
 from passlib.context import CryptContext
 
-# Import the cosine function from your face_utils
-from face_utils import cosine
+# --- IMPORTANT: MySQL Connection Configuration ---
+# For production, these should be loaded from environment variables.
+db_config = {
+    "host": "localhost",
+    "user": "root",
+    "password": "root",
+    "database": "missing_person_db"
+}
 
-DB_PATH = "missing.db"
-
-# --- Password Hashing Setup (matches api.py) ---
-# We define it here as well for the verification function
+# --- Password Hashing Setup ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# --- Helper to convert DB rows to dictionaries ---
-def dict_factory(cursor, row):
-    """Converts a database row into a dictionary."""
-    d = {}
-    for idx, col in enumerate(cursor.description):
-        d[col[0]] = row[idx]
-    return d
-
-# --- Schema Setup (No changes needed here) ---
-def create_tables():
-    """Create base tables if they don't exist."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    # Users table
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            username  TEXT UNIQUE NOT NULL,
-            password  TEXT NOT NULL
-        );
-        """
-    )
-    # Persons table
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS persons (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            name        TEXT,
-            age         INTEGER,
-            gender      TEXT,
-            loc         TEXT,
-            date        TEXT,
-            notes       TEXT,
-            photo_path  TEXT,
-            embedding   BLOB,
-            created_by  INTEGER,
-            FOREIGN KEY (created_by) REFERENCES users(id)
-        );
-        """
-    )
-    # Note: The lightweight migration for optional columns from the original file is omitted for simplicity
-    # but could be added back if needed.
-    conn.commit()
-    conn.close()
-
-# --- User Management (Updated for API) ---
-
-def create_user(username: str, hashed_password: str) -> None:
-    """Creates a new user with a pre-hashed password."""
-    conn = sqlite3.connect(DB_PATH)
+# --- Database Connection Helper ---
+def get_db_connection():
+    """Establishes and returns a connection to the MySQL database."""
     try:
-        conn.execute(
-            "INSERT INTO users (username, password) VALUES (?, ?)",
-            (username, hashed_password)
+        conn = mysql.connector.connect(**db_config)
+        return conn
+    except Error as e:
+        print(f"Error connecting to MySQL Database: {e}")
+        return None
+
+# ==============================================================================
+# SECTION: User Management
+# ==============================================================================
+
+def create_user(username: str, hashed_password: str, role: str = 'user') -> None:
+    """Creates a new user with a pre-hashed password and a specified role."""
+    conn = get_db_connection()
+    if conn is None: return
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO users (username, password, role) VALUES (%s, %s, %s)",
+            (username, hashed_password, role)
         )
         conn.commit()
     finally:
+        cursor.close()
         conn.close()
 
 def get_user_id(username: str) -> int | None:
     """Returns the user ID for a given username, or None if not found."""
-    conn = sqlite3.connect(DB_PATH)
-    row = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
-    conn.close()
-    return row[0] if row else None
+    conn = get_db_connection()
+    if conn is None: return None
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        return user['id'] if user else None
+    finally:
+        cursor.close()
+        conn.close()
+
+def get_user_role(username: str) -> str | None:
+    """Returns the role for a given username."""
+    conn = get_db_connection()
+    if conn is None: return None
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT role FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        return user['role'] if user else None
+    finally:
+        cursor.close()
+        conn.close()
 
 def verify_user_hashed(username: str, plain_password: str) -> int | None:
-    """
-    Verifies a user by checking the plain password against the stored hash.
-    Returns user_id on success, None on failure.
-    """
-    conn = sqlite3.connect(DB_PATH)
-    row = conn.execute("SELECT id, password FROM users WHERE username=?", (username,)).fetchone()
-    conn.close()
-    if not row:
-        return None # User not found
-    
-    user_id, stored_hashed_password = row
-    if pwd_context.verify(plain_password, stored_hashed_password):
-        return user_id
-    return None
+    """Verifies a user's password. Returns user_id on success, None on failure."""
+    conn = get_db_connection()
+    if conn is None: return None
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT id, password FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        if not user:
+            return None
+        if pwd_context.verify(plain_password, user['password']):
+            return user['id']
+        return None
+    finally:
+        cursor.close()
+        conn.close()
 
-# --- Missing Person Records (Updated for API) ---
+# ==============================================================================
+# SECTION: Missing Person Case Management
+# ==============================================================================
 
 def add_person(data: dict, embedding: np.ndarray, user_id: int) -> None:
-    """Insert a new missing-person record."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        """
-        INSERT INTO persons (name, age, gender, loc, photo_path, embedding, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            data.get("name"),
-            data.get("age"),
-            data.get("gender"),
-            data.get("loc"),
-            data.get("photo_path"),
-            embedding.astype(np.float32).tobytes(),
-            user_id,
-        ),
-    )
-    conn.commit()
-    conn.close()
+    """Inserts a new missing-person record into the 'persons' table."""
+    conn = get_db_connection()
+    if conn is None: return
+    cursor = conn.cursor()
+    try:
+        sql = "INSERT INTO persons (name, age, gender, loc, photo_path, embedding, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+        values = (data.get("name"), data.get("age"), data.get("gender"), data.get("loc"), data.get("photo_path"), embedding.astype(np.float32).tobytes(), user_id)
+        cursor.execute(sql, values)
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
 
 def find_matches(query_embedding: np.ndarray, strictness: float) -> List[Dict[str, Any]]:
-    """
-    Finds all persons in the database matching the query embedding.
-    Returns a list of dictionaries (API-friendly).
-    """
-    conn = sqlite3.connect(DB_PATH)
-    # Use the dict_factory to get results as dictionaries
-    conn.row_factory = dict_factory
-    
-    # Fetch all records to compare against
-    all_persons_rows = conn.execute(
-        "SELECT id, name, age, gender, loc, photo_path, embedding FROM persons"
-    ).fetchall()
-    conn.close()
-
-    matches = []
-    for person in all_persons_rows:
-        # Convert the embedding from a blob back to a numpy array
-        db_embedding = np.frombuffer(person['embedding'], dtype=np.float32)
-        
-        # Calculate similarity
-        similarity = cosine(query_embedding, db_embedding)
-        
-        if similarity >= strictness:
-            # Don't include the raw embedding in the API response
-            del person['embedding']
-            person['similarity'] = round(similarity, 4) # Add similarity score
-            matches.append(person)
-    
-    # Sort matches by the highest similarity
-    matches.sort(key=lambda x: x['similarity'], reverse=True)
-    
-    return matches
+    """Finds all persons matching a query embedding based on cosine similarity."""
+    from face_utils import cosine  # Local import to avoid circular dependency
+    conn = get_db_connection()
+    if conn is None: return []
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT id, name, age, gender, loc, photo_path, embedding FROM persons")
+        all_persons = cursor.fetchall()
+        matches = []
+        for person in all_persons:
+            db_embedding = np.frombuffer(person['embedding'], dtype=np.float32)
+            similarity = cosine(query_embedding, db_embedding)
+            if similarity >= strictness:
+                del person['embedding']
+                person['similarity'] = round(similarity, 4)
+                matches.append(person)
+        matches.sort(key=lambda x: x['similarity'], reverse=True)
+        return matches
+    finally:
+        cursor.close()
+        conn.close()
 
 def get_user_cases(user_id: int) -> List[Dict[str, Any]]:
-    """
-    Return all active cases for the given user as a list of dictionaries.
-    """
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = dict_factory # Use our dictionary factory
+    """Returns all active cases submitted by a specific user."""
+    conn = get_db_connection()
+    if conn is None: return []
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT id, name, age, gender, loc, photo_path FROM persons WHERE created_by = %s ORDER BY id DESC", (user_id,))
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
 
-    # Select all relevant columns for cases created by the specific user
+def get_all_active_cases() -> List[Dict[str, Any]]:
+    """Returns all active cases, joined with the creator's username."""
+    conn = get_db_connection()
+    if conn is None: return []
+    cursor = conn.cursor(dictionary=True)
+    try:
+        sql = """
+            SELECT p.id, p.name, p.age, p.gender, p.loc, p.photo_path, u.username as created_by_user
+            FROM persons p
+            LEFT JOIN users u ON p.created_by = u.id
+            ORDER BY p.id DESC
+        """
+        cursor.execute(sql)
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+        
+def get_case_creator(person_id: int) -> int | None:
+    """Gets the user_id of the user who created a specific case."""
+    conn = get_db_connection()
+    if conn is None: return None
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT id, name, age, gender, loc, photo_path
-        FROM persons
-        WHERE created_by = ?
-        ORDER BY id DESC
-        """,
-        (user_id,)
-    )
-    cases = cursor.fetchall()
-    conn.close()
-    return cases
+    try:
+        cursor.execute("SELECT created_by FROM persons WHERE id = %s", (person_id,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    finally:
+        cursor.close()
+        conn.close()
 
-
-def create_tables():
-    # ... (existing code for users and persons tables) ...
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    # ...
-    # Add this part:
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS found_persons AS SELECT * FROM persons WHERE 0;
-        """
-    )
-    conn.commit()
-    conn.close()
-
-# --- New Functions for Marking and Getting Found Cases ---
+def get_case_name(person_id: int) -> str | None:
+    """Gets the name associated with a specific case ID."""
+    conn = get_db_connection()
+    if conn is None: return None
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT name FROM persons WHERE id = %s", (person_id,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    finally:
+        cursor.close()
+        conn.close()
 
 def mark_person_as_found(person_id: int) -> bool:
-    """Move a record from 'persons' to 'found_persons' and delete the original.
-    Returns True on success, False if the person was not found."""
-    with sqlite3.connect(DB_PATH) as conn:
-        cur = conn.cursor()
-        # Check if the person exists in the active 'persons' table
-        cur.execute("SELECT * FROM persons WHERE id = ?", (person_id,))
-        row = cur.fetchone()
-        if row:
-            # Insert the record into the archive table
-            cur.execute("INSERT INTO found_persons SELECT * FROM persons WHERE id = ?", (person_id,))
-            # Delete the record from the active table
-            cur.execute("DELETE FROM persons WHERE id = ?", (person_id,))
+    """Moves a record from 'persons' to 'found_persons' and deletes the original."""
+    conn = get_db_connection()
+    if conn is None: return False
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM persons WHERE id = %s", (person_id,))
+        row_to_move = cursor.fetchone()
+        if row_to_move:
+            column_names = [desc[0] for desc in cursor.description]
+            placeholders = ', '.join(['%s'] * len(column_names))
+            sql_insert = f"INSERT INTO found_persons ({', '.join(column_names)}) VALUES ({placeholders})"
+            cursor.execute(sql_insert, row_to_move)
+            cursor.execute("DELETE FROM persons WHERE id = %s", (person_id,))
             conn.commit()
             return True
-    return False
+        return False
+    finally:
+        cursor.close()
+        conn.close()
 
 def get_found_cases() -> List[Dict[str, Any]]:
-    """
-    Return all found/resolved cases as a list of dictionaries.
-    """
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = dict_factory
+    """Returns all cases from the 'found_persons' archive table."""
+    conn = get_db_connection()
+    if conn is None: return []
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT id, name, age, gender, loc, photo_path FROM found_persons ORDER BY id DESC")
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+# ==============================================================================
+# SECTION: Notification Management
+# ==============================================================================
+
+def create_notification(user_id: int, message: str) -> None:
+    """Creates a new notification for a specific user."""
+    conn = get_db_connection()
+    if conn is None: return
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT id, name, age, gender, loc, photo_path
-        FROM found_persons
-        ORDER BY id DESC
-        """
-    )
-    cases = cursor.fetchall()
-    conn.close()
-    return cases
-# --- Auto-run setup ---
-create_tables()
+    try:
+        cursor.execute("INSERT INTO notifications (user_id, message) VALUES (%s, %s)", (user_id, message))
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+def get_unread_notifications(user_id: int) -> List[Dict[str, Any]]:
+    """Fetches all notifications for a user, which the frontend can filter."""
+    conn = get_db_connection()
+    if conn is None: return []
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT id, message, is_read, created_at FROM notifications WHERE user_id = %s ORDER BY created_at DESC",
+            (user_id,)
+        )
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+def mark_notification_as_read(notification_id: int, user_id: int) -> bool:
+    """Marks a specific notification as read for the given user."""
+    conn = get_db_connection()
+    if conn is None: return False
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE notifications SET is_read = TRUE WHERE id = %s AND user_id = %s",
+            (notification_id, user_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0  # Returns True if a row was updated
+    finally:
+        cursor.close()
+        conn.close()

@@ -107,3 +107,19 @@ export const getFoundCases = async () => {
   const response = await apiClient.get('/api/person/found-cases');
   return response.data; // Should return { cases: [...] }
 };
+
+// Add this inside frontend/src/services/api.jsx
+
+export const getAllActiveCases = async () => {
+  const response = await apiClient.get('/api/person/all-active-cases');
+  return response.data; // Should return { cases: [...] }
+};
+
+export const getNotifications = async () => {
+  const response = await apiClient.get('/api/notifications');
+  return response.data;
+};
+
+export const markNotificationAsRead = async (notificationId) => {
+  return await apiClient.post(`/api/notifications/${notificationId}/read`);
+};
