@@ -14,7 +14,7 @@ from geopy.geocoders import Nominatim
 from PIL import Image
 from streamlit_folium import st_folium
 
-import db
+import  db
 from face_utils import cosine, get_embedding
 
 st.set_page_config(page_title="Missing Person Finder", page_icon="🔍", layout="wide")

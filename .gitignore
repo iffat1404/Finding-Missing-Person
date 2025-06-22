@@ -1,26 +1,56 @@
+# ========================
+# General / OS / Editor
+# ========================
 # Byte-compiled / cache
 __pycache__/
 *.py[cod]
 *.so
 
-# Virtual environments
-venv/
-.venv/
-
-# Local environment variables
-.env
-
-# SQLite database
-*.db
-
-# Uploaded images
-photos/
-
-# VSCode settings (optional)
-.vscode/
-
 # macOS system files
 .DS_Store
 
-# Logs (optional)
+# Logs
 *.log
+
+# Local environment variables
+.env*
+!.env.example
+
+# VSCode settings
+.vscode/
+
+# ========================
+# Backend (Python)
+# ========================
+# Virtual environments
+backend/venv/
+backend/.venv/
+
+# SQLite database
+backend/*.db
+backend/*.db-journal
+backend/*.sqlite3
+
+# Uploaded images (These should not be in git)
+backend/photos/
+
+# ========================
+# Frontend (React/Vite)
+# ========================
+# Dependencies
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+frontend/.next/
+
+# Debug logs
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# Local env files
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
